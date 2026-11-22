@@ -16,8 +16,8 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_SCAN_INTERVAL,
-    METAL_GOLD_CODE,
-    METAL_SILVER_CODE,
+    METAL_CODES,
+    METAL_NAMES,
     MIN_SCAN_INTERVAL,
 )
 from .xml_api import CbrXmlApi, XmlApiError
@@ -28,8 +28,6 @@ FALLBACK_CURRENCIES = {
     "GBP": "Фунт стерлингов",
     "CNY": "Юань",
     "JPY": "Иена",
-    METAL_GOLD_CODE: "Золото",
-    METAL_SILVER_CODE: "Серебро",
 }
 
 
@@ -87,10 +85,13 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             currencies = await CbrXmlApi(
                 async_get_clientsession(self.hass)
-            ).async_get_options()
+            ).async_get_currency_options()
         except XmlApiError:
             currencies = FALLBACK_CURRENCIES
-            errors["base"] = "cannot_connect"
+
+        # Металлы добавляем всегда, даже если сервис ЦБ недоступен:
+        # они не зависят от ответа валютного списка.
+        currencies.update(METAL_NAMES)
 
         return self.async_show_form(
             step_id="user",

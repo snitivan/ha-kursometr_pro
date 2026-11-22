@@ -145,11 +145,16 @@ class CbrXmlApi:
             f"<ToDate>{last_day.isoformat()}T00:00:00</ToDate>"
         )
         root = await self._call("DragMetDynamicXML", body)
+        # CodMet сервиса ("1", "2") отображаем в собственные коды GOLD/SILVER.
+        special_by_codmet = {
+            "1": METAL_GOLD_CODE,
+            "2": METAL_SILVER_CODE,
+        }
         best: dict[str, tuple[str, float]] = {}
         for row in root.iter("DrgMet"):
-            code = (row.findtext("CodMet") or "").strip()
-            meta = METALS_BY_CODE.get(code)
-            if meta is None:
+            codmet = (row.findtext("CodMet") or "").strip()
+            code = special_by_codmet.get(codmet)
+            if code is None:
                 continue
             raw_date = _local_date(row.findtext("DateMet") or "")
             try:
@@ -163,15 +168,14 @@ class CbrXmlApi:
                 best[code] = (raw_date, price)
         if not best:
             raise XmlInvalidResponseError("В ответе нет цен металлов")
-        return {
-            code: MetalRate(
-                code=code,
-                name=METALS_BY_CODE[code][0],
-                unit=METALS_BY_CODE[code][1],
-                price=price,
-            )
-            for code, (_, price) in best.items()
-        }
+        result = {}
+        for codmet, code in special_by_codmet.items():
+            if code not in best:
+                continue
+            _, price = best[code]
+            name, unit = METALS_BY_CODE[codmet]
+            result[code] = MetalRate(code=code, name=name, unit=unit, price=price)
+        return result
 
     async def async_get_daily_rates(self) -> DailyRates:
         latest = await self.async_get_latest_date()
@@ -189,6 +193,20 @@ class CbrXmlApi:
             metals = {}
 
         return DailyRates(date=latest, currencies=currencies, metals=metals)
+
+    async def async_get_currency_options(self) -> dict[str, str]:
+        """Валютный список для мастера настройки (без металлов).
+
+        Дешевле ``async_get_daily_rates``: только последняя дата и курсы
+        валют — металлы в селекторе статичны и добавляются отдельно.
+        """
+        latest = await self.async_get_latest_date()
+        try:
+            day = date.fromisoformat(latest)
+        except ValueError as err:
+            raise XmlInvalidResponseError(f"Непонятная дата: {latest!r}") from err
+        currencies = await self.async_get_currencies_on_date(day)
+        return {code: name for code, (name, _, _) in currencies.items()}
 
     async def async_get_options(self) -> dict[str, str]:
         """Список того, что можно измерить: валюты + золото и серебро."""

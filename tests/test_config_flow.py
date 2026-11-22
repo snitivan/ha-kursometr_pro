@@ -13,7 +13,7 @@ CURRENCIES = {"USD": "Доллар США", "EUR": "Евро", "JPY": "Иена"
 
 async def test_user_flow_creates_entry(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES, GOLD="Золото", SILVER="Серебро"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -24,7 +24,7 @@ async def test_user_flow_creates_entry(hass):
     assert result["step_id"] == "user"
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES, GOLD="Золото", SILVER="Серебро"),
     ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(
@@ -47,7 +47,7 @@ async def test_duplicate_currency_is_aborted(hass):
     ).add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES, GOLD="Золото", SILVER="Серебро"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -64,7 +64,7 @@ async def test_duplicate_currency_is_aborted(hass):
 
 async def test_connection_error_shows_fallback_form(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         side_effect=XmlConnectionError("offline"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -72,7 +72,14 @@ async def test_connection_error_shows_fallback_form(hass):
         )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
+    # Мастер не должен «ломаться» без ЦБ: показываем fallback-валюты
+    # и металлы, предупреждение об ошибке связи больше не ставим.
+    assert result["errors"] == {}
+    currency_key = next(
+        k for k in result["data_schema"].schema if str(k) == CONF_CURRENCY
+    )
+    values = [opt["value"] for opt in currency_key.options["options"]]
+    assert "USD" in values and "GOLD" in values and "SILVER" in values
 
 
 async def test_options_flow_updates_interval(hass):
