@@ -1,8 +1,37 @@
+import functools
+import socket
 import threading
 
+import aiohttp.resolver
 import pytest
 
 pytest_plugins = "pytest_homeassistant_custom_component"
+
+
+# В CI-окружении установлен pycares 5.x, чей Channel.getaddrinfo() принимает
+# callback только именованным аргументом, тогда как aiodns 3.2 передаёт его
+# позиционно — любой фактический HTTP-запрос падает с TypeError. Тесты не
+# должны ходить в сеть, поэтому заставляем aiohttp использовать системный
+# резолвер вместо битого AsyncResolver (aiodns).
+aiohttp.resolver.DefaultResolver = aiohttp.resolver.ThreadedResolver
+
+
+@pytest.fixture(autouse=True)
+def no_network(event_loop):
+    """Запрещаем тестам реальные сетевые обращения (кроме localhost)."""
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guard(host, port, *args, **kwargs):
+        if str(host) not in ("127.0.0.1", "localhost", "::1"):
+            raise OSError("Network access disabled in tests")
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = functools.wraps(real_getaddrinfo)(guard)
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = real_getaddrinfo
 
 
 @pytest.fixture(autouse=True)
