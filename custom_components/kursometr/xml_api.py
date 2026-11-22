@@ -9,6 +9,11 @@
 Ответы имеют формат DataSet-подобного XML без пространств имён, поэтому
 парсинг выполняется стандартной библиотекой ``xml.etree.ElementTree`` —
 никаких дополнительных зависимостей не требуется.
+
+Важное ограничение сервиса: методы с датой в прошлом отдают данные только
+на даты, которые ЦБ уже опубликовал, а «будущие» курсы (завтрашние)
+публикуются вечером предыдущего рабочего дня и доступны тем же методом
+``GetCursOnDateXML``.
 """
 
 from __future__ import annotations
@@ -52,7 +57,7 @@ class DailyRates:
     metals: dict[str, MetalRate]
 
 
-def _previous_weekday(day: date) -> date:
+def previous_weekday(day: date) -> date:
     """Предыдущий рабочий день ЦБ (ПН..ПТ).
 
     Курс «на завтра» публикуется заранее только в рабочие дни; в выходные
@@ -63,6 +68,9 @@ def _previous_weekday(day: date) -> date:
     while prev.weekday() >= 5:
         prev -= timedelta(days=1)
     return prev
+
+
+_previous_weekday = previous_weekday
 
 
 def _envelope(method: str, body_xml: str = "") -> str:
@@ -210,7 +218,7 @@ class CbrXmlApi:
     async def async_get_yesterday_rates(self) -> DailyRates:
         """Курсы за предыдущий рабочий день (суббота/воскресенье -> пятница)."""
         latest = date.fromisoformat(await self.async_get_latest_date())
-        prev = _previous_weekday(latest)
+        prev = previous_weekday(latest)
         prev_iso = prev.isoformat()
         currencies = await self.async_get_currencies_on_date(prev)
         try:
@@ -218,6 +226,20 @@ class CbrXmlApi:
         except XmlApiError:
             metals = {}
         return DailyRates(date=prev_iso, currencies=currencies, metals=metals)
+
+    async def async_get_rates_on_date(self, day: date) -> DailyRates | None:
+        """Курсы на произвольную дату; ``None`` — если ЦБ их не публикует."""
+        try:
+            currencies = await self.async_get_currencies_on_date(day)
+        except XmlInvalidResponseError:
+            return None
+        try:
+            metals = await self.async_get_metals_range(day)
+        except XmlApiError:
+            metals = {}
+        return DailyRates(
+            date=day.isoformat(), currencies=currencies, metals=metals
+        )
 
     async def async_get_tomorrow_rates(self) -> DailyRates | None:
         """Курсы «на завтра» — ЦБ публикует их заранее только в рабочие дни.
@@ -229,17 +251,7 @@ class CbrXmlApi:
         target = latest + timedelta(days=1)
         if target.weekday() >= 5:
             return None
-        try:
-            currencies = await self.async_get_currencies_on_date(target)
-        except XmlInvalidResponseError:
-            return None
-        try:
-            metals = await self.async_get_metals_range(target)
-        except XmlApiError:
-            metals = {}
-        return DailyRates(
-            date=target.isoformat(), currencies=currencies, metals=metals
-        )
+        return await self.async_get_rates_on_date(target)
 
     async def async_get_currency_options(self) -> dict[str, str]:
         """Валютный список для мастера настройки (без металлов).

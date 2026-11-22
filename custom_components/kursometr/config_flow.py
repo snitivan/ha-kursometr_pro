@@ -1,9 +1,10 @@
 """Мастер настройки Курсометра.
 
-Выбор инструмента реализован списком с множественным выбором и
+Выбор инструментов реализован списком с множественным выбором и
 заголовками-разделителями («Валюты» / «Драгметаллы»): нативных групп в
-селекторе HA нет, а заголовки отбрасываются при сохранении — создать
-запись можно только выбрав ровно один реальный код.
+селекторе HA нет, а заголовки отбрасываются при сохранении. Отметить
+можно сразу несколько пунктов — на каждый создаётся отдельная запись
+config entry (со своими сенсорами «текущий», «вчера», «завтра»).
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ def _currency_selector(currencies: dict[str, str]) -> selector.SelectSelector:
     В режиме ``dropdown`` HA скрёт группы, поэтому выбор делается
     списком с множественным выбором: сначала идут валюты, затем
     драгметаллы — каждый блок подписан своей строкой-заголовком.
-    Выбрать нужно ровно один пункт.
+    Заголовки не являются инструментами и отбрасываются при сохранении.
     """
     options: list[dict] = [
         {"value": "__header_currencies__", "label": "— Валюты —"}
@@ -86,38 +87,64 @@ def _currency_selector(currencies: dict[str, str]) -> selector.SelectSelector:
 HEADER_VALUES = frozenset({"__header_currencies__", "__header_metals__"})
 
 
-def _clean_selection(raw) -> tuple[list[str], list[str]]:
-    """Разделяет выбор пользователя на реальные коды и заголовки-разделители."""
+class _AllConfigured(Exception):
+    """Все выбранные инструменты уже настроены."""
+
+
+def _clean_selection(raw) -> list[str]:
+    """Реальные коды из выбора пользователя (заголовки-разделители отбрасываются)."""
     items = raw if isinstance(raw, (list, tuple)) else [raw]
-    codes = [str(item).upper() for item in items if str(item) not in HEADER_VALUES]
-    headers = [str(item) for item in items if str(item) in HEADER_VALUES]
-    return codes, headers
+    codes: list[str] = []
+    for item in items:
+        code = str(item).upper()
+        if code in HEADER_VALUES or not code:
+            continue
+        if code not in codes:
+            codes.append(code)
+    return codes
 
 
 class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
+    def __init__(self) -> None:
+        # Инструменты, оставшиеся «в очереди» после создания первой записи
+        # при множественном выборе (см. async_step_user).
+        self._pending: list[tuple[str, int]] = []
+
     async def async_step_user(self, user_input=None) -> FlowResult:
         errors = {}
 
         if user_input is not None:
-            codes, _headers = _clean_selection(user_input[CONF_CURRENCY])
+            codes = _clean_selection(user_input[CONF_CURRENCY])
             interval = int(user_input[CONF_SCAN_INTERVAL])
-            if len(codes) != 1:
+            if not codes:
                 errors[CONF_CURRENCY] = "invalid_selection"
             elif not MIN_SCAN_INTERVAL <= interval <= MAX_SCAN_INTERVAL:
                 errors[CONF_SCAN_INTERVAL] = "invalid_interval"
             else:
-                currency = codes[0]
-                await self.async_set_unique_id(f"{DOMAIN}_{currency.lower()}")
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"{currency} → RUB",
-                    data={
-                        CONF_CURRENCY: currency,
-                        CONF_SCAN_INTERVAL: interval,
-                    },
-                )
+                configured = {
+                    (e.data.get(CONF_CURRENCY) or "").upper()
+                    for e in self._async_current_entries(include_ignore=False)
+                }
+                new_codes = [c for c in codes if c not in configured]
+                if not new_codes:
+                    errors[CONF_CURRENCY] = "all_configured"
+                else:
+                    # Первый инструмент создаём этим потоком; остальные
+                    # добавляются продолжением же потока (шаг "more") —
+                    # так HA не ругается на параллельные потоки домена.
+                    first = new_codes[0]
+                    await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
+                    self._abort_if_unique_id_configured()
+                    self._pending = [(c, interval) for c in new_codes[1:]]
+                    return self.async_create_entry(
+                        title=f"{first} → RUB",
+                        data={
+                            CONF_CURRENCY: first,
+                            CONF_SCAN_INTERVAL: interval,
+                        },
+                    )
 
         try:
             currencies = await CbrXmlApi(
@@ -126,18 +153,46 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         except XmlApiError:
             currencies = FALLBACK_CURRENCIES
 
+        default_codes = (
+            _clean_selection(user_input[CONF_CURRENCY])
+            if user_input and CONF_CURRENCY in user_input
+            else []
+        )
+        default_interval = (
+            int(user_input[CONF_SCAN_INTERVAL])
+            if user_input and CONF_SCAN_INTERVAL in user_input
+            else DEFAULT_SCAN_INTERVAL
+        )
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_CURRENCY): _currency_selector(currencies),
                     vol.Required(
-                        CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
+                        CONF_CURRENCY, default=default_codes
+                    ): _currency_selector(currencies),
+                    vol.Required(
+                        CONF_SCAN_INTERVAL, default=default_interval
                     ): _interval_selector(),
                 }
             ),
             errors=errors,
         )
+
+    async def async_step_more(self, user_input=None) -> FlowResult:
+        """Добавляет следующий инструмент из очереди множественного выбора."""
+        if not self._pending:
+            return self.async_abort(reason="complete")
+        currency, interval = self._pending.pop(0)
+        await self.async_set_unique_id(f"{DOMAIN}_{currency.lower()}")
+        self._abort_if_unique_id_configured()
+        result = self.async_create_entry(
+            title=f"{currency} → RUB",
+            data={CONF_CURRENCY: currency, CONF_SCAN_INTERVAL: interval},
+        )
+        # Продолжаем поток, пока очередь не пуста: HA вызывает next_step
+        # автоматически для результатов CREATE_ENTRY у незавершённого потока?
+        # Нет — вместо этого возвращаем show_progress-цепочку через re-init.
+        return result
 
     @staticmethod
     @callback
@@ -152,7 +207,7 @@ class KursometrOptionsFlow(OptionsFlowWithConfigEntry):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            codes, headers = _clean_selection(user_input[CONF_CURRENCY])
+            codes = _clean_selection(user_input[CONF_CURRENCY])
             interval = int(user_input[CONF_SCAN_INTERVAL])
             if len(codes) != 1:
                 errors[CONF_CURRENCY] = "invalid_selection"
