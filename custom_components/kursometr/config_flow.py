@@ -11,14 +11,16 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import CbrApi, CbrApiError
 from .const import (
     CONF_CURRENCY,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_SCAN_INTERVAL,
+    METAL_GOLD_CODE,
+    METAL_SILVER_CODE,
     MIN_SCAN_INTERVAL,
 )
+from .xml_api import CbrXmlApi, XmlApiError
 
 FALLBACK_CURRENCIES = {
     "USD": "Доллар США",
@@ -26,6 +28,8 @@ FALLBACK_CURRENCIES = {
     "GBP": "Фунт стерлингов",
     "CNY": "Юань",
     "JPY": "Иена",
+    METAL_GOLD_CODE: "Золото",
+    METAL_SILVER_CODE: "Серебро",
 }
 
 
@@ -81,10 +85,10 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
             errors[CONF_SCAN_INTERVAL] = "invalid_interval"
 
         try:
-            currencies = await CbrApi(
+            currencies = await CbrXmlApi(
                 async_get_clientsession(self.hass)
-            ).async_get_currencies()
-        except CbrApiError:
+            ).async_get_options()
+        except XmlApiError:
             currencies = FALLBACK_CURRENCIES
             errors["base"] = "cannot_connect"
 

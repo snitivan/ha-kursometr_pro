@@ -5,7 +5,20 @@ from __future__ import annotations
 DOMAIN = "kursometr"
 CONF_CURRENCY = "currency"
 
-CBR_API_URL = "https://www.cbr-xml-daily.ru/daily_json.js"
+# Официальный SOAP-сервис Банка России (XML Web Service Daily Info).
+CBR_SOAP_URL = "https://www.cbr.ru/DailyInfoWebServ/DailyInfo.asmx"
+
+# Специальные коды драгоценных металлов (не ISO-4217, наши собственные).
+METAL_GOLD_CODE = "GOLD"
+METAL_SILVER_CODE = "SILVER"
+
+# CodMet из DragMetDynamicXML -> (название, единица измерения)
+METALS_BY_CODE = {
+    "1": ("Золото", "RUB/g"),
+    "2": ("Серебро", "RUB/g"),
+}
+
+METAL_CODES = (METAL_GOLD_CODE, METAL_SILVER_CODE)
 
 DEFAULT_SCAN_INTERVAL = 3600
 MIN_SCAN_INTERVAL = 10

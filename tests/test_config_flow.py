@@ -5,7 +5,7 @@ from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.kursometr.api import CbrConnectionError
+from custom_components.kursometr.xml_api import XmlConnectionError
 from custom_components.kursometr.const import CONF_CURRENCY, DOMAIN
 
 CURRENCIES = {"USD": "Доллар США", "EUR": "Евро", "JPY": "Иена"}
@@ -13,8 +13,8 @@ CURRENCIES = {"USD": "Доллар США", "EUR": "Евро", "JPY": "Иена"
 
 async def test_user_flow_creates_entry(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrApi.async_get_currencies",
-        return_value=CURRENCIES,
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        return_value=dict(CURRENCIES, GOLD="Золото", SILVER="Серебро"),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
@@ -24,8 +24,8 @@ async def test_user_flow_creates_entry(hass):
     assert result["step_id"] == "user"
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrApi.async_get_currencies",
-        return_value=CURRENCIES,
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        return_value=dict(CURRENCIES, GOLD="Золото", SILVER="Серебро"),
     ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -47,8 +47,8 @@ async def test_duplicate_currency_is_aborted(hass):
     ).add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrApi.async_get_currencies",
-        return_value=CURRENCIES,
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        return_value=dict(CURRENCIES, GOLD="Золото", SILVER="Серебро"),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
@@ -64,8 +64,8 @@ async def test_duplicate_currency_is_aborted(hass):
 
 async def test_connection_error_shows_fallback_form(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrApi.async_get_currencies",
-        side_effect=CbrConnectionError("offline"),
+        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_options",
+        side_effect=XmlConnectionError("offline"),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}

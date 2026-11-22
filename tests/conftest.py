@@ -18,6 +18,10 @@ def ignore_pycares_shutdown_thread():
     ``Thread-N (_run_safe_shutdown_loop)`` (pycares >= 4.7), который живёт до
     конца процесса. Проверка verify_cleanup из pytest-homeassistant-custom-
     component ошибочно принимает его за оставшуюся после теста нить.
+
+    Поток может стартовать и во время teardown (после ``yield``), поэтому
+    заглушку снимаем не сразу, а через ``loop.call_soon`` — к моменту
+    следующего прогона событий ``threading.enumerate`` уже не будет её видеть.
     """
     original_enumerate = threading.enumerate
 
@@ -32,4 +36,13 @@ def ignore_pycares_shutdown_thread():
     try:
         yield
     finally:
-        threading.enumerate = original_enumerate
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(
+                setattr, threading, "enumerate", original_enumerate
+            )
+        else:
+            threading.enumerate = original_enumerate
