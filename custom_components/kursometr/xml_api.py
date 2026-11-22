@@ -52,6 +52,19 @@ class DailyRates:
     metals: dict[str, MetalRate]
 
 
+def _previous_weekday(day: date) -> date:
+    """Предыдущий рабочий день ЦБ (ПН..ПТ).
+
+    Курс «на завтра» публикуется заранее только в рабочие дни; в выходные
+    и праздники сервис данных не отдаёт — это штатная ситуация, для которой
+    сенсор показывает временную заглушку.
+    """
+    prev = day - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    return prev
+
+
 def _envelope(method: str, body_xml: str = "") -> str:
     return (
         '<?xml version="1.0" encoding="utf-8"?>'
@@ -193,6 +206,40 @@ class CbrXmlApi:
             metals = {}
 
         return DailyRates(date=latest, currencies=currencies, metals=metals)
+
+    async def async_get_yesterday_rates(self) -> DailyRates:
+        """Курсы за предыдущий рабочий день (суббота/воскресенье -> пятница)."""
+        latest = date.fromisoformat(await self.async_get_latest_date())
+        prev = _previous_weekday(latest)
+        prev_iso = prev.isoformat()
+        currencies = await self.async_get_currencies_on_date(prev)
+        try:
+            metals = await self.async_get_metals_range(prev)
+        except XmlApiError:
+            metals = {}
+        return DailyRates(date=prev_iso, currencies=currencies, metals=metals)
+
+    async def async_get_tomorrow_rates(self) -> DailyRates | None:
+        """Курсы «на завтра» — ЦБ публикует их заранее только в рабочие дни.
+
+        Возвращает ``None``, если данных ещё нет (выходные, праздники или
+        публикация ещё не состоялась) — это штатная ситуация, а не ошибка.
+        """
+        latest = date.fromisoformat(await self.async_get_latest_date())
+        target = latest + timedelta(days=1)
+        if target.weekday() >= 5:
+            return None
+        try:
+            currencies = await self.async_get_currencies_on_date(target)
+        except XmlInvalidResponseError:
+            return None
+        try:
+            metals = await self.async_get_metals_range(target)
+        except XmlApiError:
+            metals = {}
+        return DailyRates(
+            date=target.isoformat(), currencies=currencies, metals=metals
+        )
 
     async def async_get_currency_options(self) -> dict[str, str]:
         """Валютный список для мастера настройки (без металлов).
