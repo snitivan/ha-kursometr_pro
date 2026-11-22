@@ -29,7 +29,7 @@ async def test_user_flow_creates_entry(hass):
     ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_CURRENCY: "usd", CONF_SCAN_INTERVAL: 3600},
+            {CONF_CURRENCY: "USD", CONF_SCAN_INTERVAL: 3600},
         )
         await hass.async_block_till_done()
 

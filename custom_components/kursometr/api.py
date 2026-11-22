@@ -42,7 +42,7 @@ class CbrApi:
         self._session = session
         self._url = url
 
-    async def async_get_rates(self) -> CbrRates:
+    async def async_get_payload(self) -> dict:
         try:
             async with self._session.get(
                 self._url,
@@ -50,11 +50,14 @@ class CbrApi:
                 headers={"Accept": "application/json"},
             ) as response:
                 response.raise_for_status()
-                payload = await response.json(content_type=None)
+                return await response.json(content_type=None)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise CbrConnectionError(str(err)) from err
         except (ValueError, TypeError) as err:
             raise CbrInvalidResponseError("ЦБ прислал не JSON") from err
+
+    async def async_get_rates(self) -> CbrRates:
+        payload = await self.async_get_payload()
 
         raw = payload.get("Valute")
         if not isinstance(raw, dict) or not raw:
