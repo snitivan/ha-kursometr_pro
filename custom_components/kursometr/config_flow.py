@@ -1,10 +1,20 @@
-"""Мастер настройки Курсометра."""
+"""Мастер настройки Курсометра.
+
+Выбор инструмента реализован списком с множественным выбором и
+заголовками-разделителями («Валюты» / «Драгметаллы»): нативных групп в
+селекторе HA нет, а заголовки отбрасываются при сохранении — создать
+запись можно только выбрав ровно один реальный код.
+"""
 
 from __future__ import annotations
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    OptionsFlowWithConfigEntry,
+)
 from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
@@ -43,22 +53,45 @@ def _interval_selector() -> selector.NumberSelector:
     )
 
 
-def _schema(currencies: dict[str, str], default: int) -> vol.Schema:
-    return vol.Schema(
-        {
-            vol.Required(CONF_CURRENCY): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        selector.SelectOptionDict(value=code, label=f"{code} — {name}")
-                        for code, name in sorted(currencies.items())
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                    sort=False,
-                )
-            ),
-            vol.Required(CONF_SCAN_INTERVAL, default=default): _interval_selector(),
-        }
+def _currency_selector(currencies: dict[str, str]) -> selector.SelectSelector:
+    """Выпадающий список из валют и металлов с разделением по категориям.
+
+    В режиме ``dropdown`` HA скрёт группы, поэтому выбор делается
+    списком с множественным выбором: сначала идут валюты, затем
+    драгметаллы — каждый блок подписан своей строкой-заголовком.
+    Выбрать нужно ровно один пункт.
+    """
+    options: list[dict] = [
+        {"value": "__header_currencies__", "label": "— Валюты —"}
+    ]
+    options.extend(
+        {"value": code, "label": f"{code} — {name}"}
+        for code, name in sorted(currencies.items())
     )
+    options.append({"value": "__header_metals__", "label": "— Драгметаллы —"})
+    options.extend(
+        {"value": code, "label": f"{code} — {METAL_NAMES[code]}"}
+        for code in METAL_CODES
+    )
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=options,
+            multiple=True,
+            mode=selector.SelectSelectorMode.LIST,
+            sort=False,
+        )
+    )
+
+
+HEADER_VALUES = frozenset({"__header_currencies__", "__header_metals__"})
+
+
+def _clean_selection(raw) -> tuple[list[str], list[str]]:
+    """Разделяет выбор пользователя на реальные коды и заголовки-разделители."""
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    codes = [str(item).upper() for item in items if str(item) not in HEADER_VALUES]
+    headers = [str(item) for item in items if str(item) in HEADER_VALUES]
+    return codes, headers
 
 
 class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -68,9 +101,14 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            currency = str(user_input[CONF_CURRENCY]).upper()
+            codes, _headers = _clean_selection(user_input[CONF_CURRENCY])
             interval = int(user_input[CONF_SCAN_INTERVAL])
-            if MIN_SCAN_INTERVAL <= interval <= MAX_SCAN_INTERVAL:
+            if len(codes) != 1:
+                errors[CONF_CURRENCY] = "invalid_selection"
+            elif not MIN_SCAN_INTERVAL <= interval <= MAX_SCAN_INTERVAL:
+                errors[CONF_SCAN_INTERVAL] = "invalid_interval"
+            else:
+                currency = codes[0]
                 await self.async_set_unique_id(f"{DOMAIN}_{currency.lower()}")
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
@@ -80,7 +118,6 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_SCAN_INTERVAL: interval,
                     },
                 )
-            errors[CONF_SCAN_INTERVAL] = "invalid_interval"
 
         try:
             currencies = await CbrXmlApi(
@@ -89,44 +126,76 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         except XmlApiError:
             currencies = FALLBACK_CURRENCIES
 
-        # Металлы добавляем всегда, даже если сервис ЦБ недоступен:
-        # они не зависят от ответа валютного списка.
-        currencies.update(METAL_NAMES)
-
         return self.async_show_form(
             step_id="user",
-            data_schema=_schema(currencies, DEFAULT_SCAN_INTERVAL),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CURRENCY): _currency_selector(currencies),
+                    vol.Required(
+                        CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
+                    ): _interval_selector(),
+                }
+            ),
             errors=errors,
         )
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return KursometrOptionsFlow()
+        return KursometrOptionsFlow(config_entry)
 
 
-class KursometrOptionsFlow(OptionsFlow):
+class KursometrOptionsFlow(OptionsFlowWithConfigEntry):
+    """Настройки элемента: интервал опроса и смена инструмента."""
+
     async def async_step_init(self, user_input=None) -> FlowResult:
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
+            codes, headers = _clean_selection(user_input[CONF_CURRENCY])
             interval = int(user_input[CONF_SCAN_INTERVAL])
-            if MIN_SCAN_INTERVAL <= interval <= MAX_SCAN_INTERVAL:
-                return self.async_create_entry(
-                    title="", data={CONF_SCAN_INTERVAL: interval}
+            if len(codes) != 1:
+                errors[CONF_CURRENCY] = "invalid_selection"
+            elif not MIN_SCAN_INTERVAL <= interval <= MAX_SCAN_INTERVAL:
+                errors[CONF_SCAN_INTERVAL] = "invalid_interval"
+            else:
+                currency = codes[0]
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    unique_id=f"{DOMAIN}_{currency.lower()}",
+                    title=f"{currency} → RUB",
+                    data={**self.config_entry.data, CONF_CURRENCY: currency},
+                    options={
+                        **self.config_entry.options,
+                        CONF_SCAN_INTERVAL: interval,
+                    },
                 )
-            errors[CONF_SCAN_INTERVAL] = "invalid_interval"
+                return self.async_create_entry(title="", data={})
 
+        selected = [self.config_entry.data[CONF_CURRENCY]]
         interval = int(
             self.config_entry.options.get(
                 CONF_SCAN_INTERVAL,
                 self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
             )
         )
+
+        try:
+            currencies = await CbrXmlApi(
+                async_get_clientsession(self.hass)
+            ).async_get_currency_options()
+        except XmlApiError:
+            currencies = FALLBACK_CURRENCIES
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
-                {vol.Required(CONF_SCAN_INTERVAL, default=interval): _interval_selector()}
+                {
+                    vol.Required(CONF_CURRENCY, default=selected): _currency_selector(
+                        currencies
+                    ),
+                    vol.Required(CONF_SCAN_INTERVAL, default=interval): _interval_selector(),
+                }
             ),
             errors=errors,
         )

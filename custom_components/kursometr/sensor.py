@@ -1,6 +1,19 @@
-"""Сенсор курса Курсометра."""
+"""Сенсоры курсов Курсометра.
+
+На каждый выбранный инструмент создаются три сенсора: текущий курс,
+курс за предыдущий рабочий день («вчера») и курс «на завтра». Последний
+ЦБ публикует заранее только в рабочие дни — до появления данных сенсор
+показывает временную заглушку ``STATE_UNAVAILABLE`` вместо ошибки.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import timedelta
+import logging
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -11,6 +24,13 @@ from .const import (
     ATTR_VALUE,
     DOMAIN,
 )
+from .coordinator import RateData
+
+_LOGGER = logging.getLogger(__name__)
+
+# Временная заглушка для значений, которые ЦБ ещё не опубликовал
+# (например, курс «на завтра» в выходные или до публикации).
+STATE_UNAVAILABLE = "Данные недоступны"
 
 ICONS = {
     "USD": "mdi:currency-usd",
@@ -29,10 +49,31 @@ ICONS = {
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([KursometrSensor(coordinator, entry)])
+    history = KursometrHistorySensor(coordinator, entry)
+    forecast = KursometrForecastSensor(coordinator, entry)
+    async_add_entities(
+        [KursometrSensor(coordinator, entry), history, forecast]
+    )
+
+    # Вчерашний и завтрашний курсы приходят отдельными запросами к ЦБ,
+    # поэтому обновляем их независимо от основного координатора:
+    # сразу после добавления сенсоров и далее раз в сутки.
+    async def _refresh_extras(_now=None):
+        await asyncio.gather(
+            history.async_refresh_extra(), forecast.async_refresh_extra()
+        )
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _refresh_extras, timedelta(days=1))
+    )
+    entry.async_create_background_task(
+        hass, _refresh_extras(), f"{DOMAIN}_extras_{entry.entry_id}"
+    )
 
 
 class KursometrSensor(CoordinatorEntity, SensorEntity):
+    """Текущий курс выбранной валюты или металла."""
+
     _attr_device_class = SensorDeviceClass.MONETARY
 
     def __init__(self, coordinator, entry):
@@ -63,3 +104,84 @@ class KursometrSensor(CoordinatorEntity, SensorEntity):
             ATTR_VALUE: data.value,
             ATTR_DATE: data.date,
         }
+
+
+class _KursometrDaySensor(CoordinatorEntity, SensorEntity):
+    """Общая часть сенсоров «вчера» и «на завтра».
+
+    Эти значения приходят не из координатора (он отдаёт только текущий
+    курс), а из отдельных запросов к сервису ЦБ; ответ кешируется в
+    ``_extra``, при недоступности данных показывается текстовая заглушка.
+    """
+
+    _attr_device_class = None
+    _attr_icon = "mdi:clock-outline"
+
+    def __init__(self, coordinator, entry, suffix: str):
+        super().__init__(coordinator)
+        self._suffix = suffix
+        self._extra: RateData | None = None
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{coordinator.currency}_{suffix}"
+        )
+        self._attr_name = f"Курс {coordinator.currency} ({suffix})"
+
+    async def async_refresh_extra(self) -> None:
+        raise NotImplementedError
+
+    def _set_extra(self, data: RateData | None) -> None:
+        self._extra = data
+        self.async_write_ha_state()
+
+    @property
+    def available(self):
+        # Сенсор доступен всегда: вместо ошибки показываем заглушку.
+        return True
+
+    @property
+    def native_unit_of_measurement(self):
+        return self._extra.unit if self._extra else None
+
+    @property
+    def native_value(self):
+        if self._extra is None or not self._extra.available:
+            return STATE_UNAVAILABLE
+        return self._extra.rate
+
+    @property
+    def extra_state_attributes(self):
+        if self._extra is None or not self._extra.available:
+            return {ATTR_CURRENCY: self.coordinator.currency, "status": "pending"}
+        data = self._extra
+        return {
+            ATTR_CURRENCY: self.coordinator.currency,
+            ATTR_NAME: data.name,
+            ATTR_NOMINAL: data.nominal,
+            ATTR_VALUE: data.value,
+            ATTR_DATE: data.date,
+            "status": "ok",
+        }
+
+
+class KursometrHistorySensor(_KursometrDaySensor):
+    """Курс за предыдущий рабочий день."""
+
+    _attr_icon = "mdi:history"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "вчера")
+
+    async def async_refresh_extra(self) -> None:
+        self._set_extra(await self.coordinator.async_get_yesterday())
+
+
+class KursometrForecastSensor(_KursometrDaySensor):
+    """Курс «на завтра» — публикуется ЦБ заранее только в рабочие дни."""
+
+    _attr_icon = "mdi:weather-sunset-up"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "завтра")
+
+    async def async_refresh_extra(self) -> None:
+        self._set_extra(await self.coordinator.async_get_tomorrow())
