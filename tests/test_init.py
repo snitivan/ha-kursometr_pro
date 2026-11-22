@@ -4,15 +4,19 @@ import pytest
 from homeassistant.const import CONF_SCAN_INTERVAL
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.kursometr.api import CbrRates, CurrencyRate
+from custom_components.kursometr.xml_api import DailyRates, MetalRate
 from custom_components.kursometr.const import ATTR_NOMINAL, CONF_CURRENCY, DOMAIN
 
-RATES = CbrRates(
-    date="2026-11-19T11:30:00+03:00",
+RATES = DailyRates(
+    date="2026-11-20",
     currencies={
-        "USD": CurrencyRate("USD", "Доллар США", 1, 82.2281, 82.2281),
-        "JPY": CurrencyRate("JPY", "Иен", 100, 51.5246, 0.515246),
-        "EUR": CurrencyRate("EUR", "Евро", 1, 90.3605, 90.3605),
+        "USD": ("Доллар США", 1, 82.2281),
+        "JPY": ("Иена", 100, 0.515246),
+        "EUR": ("Евро", 1, 90.3605),
+    },
+    metals={
+        "GOLD": MetalRate("GOLD", "Золото", "RUB/g", 10926.51),
+        "SILVER": MetalRate("SILVER", "Серебро", "RUB/g", 139.67),
     },
 )
 
@@ -31,7 +35,8 @@ async def test_setup_creates_sensor_with_attributes(hass):
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.CbrApi.async_get_rates", return_value=RATES
+        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -51,7 +56,8 @@ async def test_setup_creates_sensor_with_attributes(hass):
     jpy_entry = make_entry("JPY")
     jpy_entry.add_to_hass(hass)
     with patch(
-        "custom_components.kursometr.CbrApi.async_get_rates", return_value=RATES
+        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(jpy_entry.entry_id)
         await hass.async_block_till_done()
@@ -62,12 +68,33 @@ async def test_setup_creates_sensor_with_attributes(hass):
     assert jpy_state.attributes[ATTR_NOMINAL] == 100
 
 
+async def test_setup_gold_sensor_uses_metal_price(hass):
+    entry = make_entry("GOLD")
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        return_value=RATES,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.kurs_gold")
+    assert state is not None
+    assert float(state.state) == pytest.approx(10926.51)
+    assert state.attributes["unit_of_measurement"] == "RUB/g"
+    assert state.attributes["currency"] == "GOLD"
+    assert state.attributes["currency_name"] == "Золото"
+    assert state.attributes["icon"] == "mdi:gold"
+
+
 async def test_unload_removes_coordinator(hass):
     entry = make_entry()
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.CbrApi.async_get_rates", return_value=RATES
+        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -82,7 +109,8 @@ async def test_options_change_reloads_coordinator(hass):
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.CbrApi.async_get_rates", return_value=RATES
+        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

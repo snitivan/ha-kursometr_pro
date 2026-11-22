@@ -8,9 +8,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import CbrApi
 from .const import CONF_CURRENCY, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS
 from .coordinator import KursometrCoordinator
+from .xml_api import CbrXmlApi
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -20,7 +20,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    api = CbrApi(async_get_clientsession(hass))
+    api = CbrXmlApi(async_get_clientsession(hass))
     interval = int(
         entry.options.get(
             CONF_SCAN_INTERVAL,
@@ -44,7 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
-    hass.data[DOMAIN].pop(entry.entry_id)
+    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return True
 
 

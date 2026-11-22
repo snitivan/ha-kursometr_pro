@@ -1,4 +1,4 @@
-"""Координатор обновления курсов."""
+"""Координатор обновления курсов (официальный XML-сервис ЦБ РФ)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,13 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CbrApi, CbrApiError
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    METAL_CODES,
+    METAL_GOLD_CODE,
+    METALS_BY_CODE,
+)
+from .xml_api import CbrXmlApi, XmlApiError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,13 +27,14 @@ class RateData:
     nominal: int
     value: float
     date: str
+    unit: str
 
 
 class KursometrCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
-        api: CbrApi,
+        api: CbrXmlApi,
         currency: str,
         scan_interval: int,
     ):
@@ -40,21 +46,38 @@ class KursometrCoordinator(DataUpdateCoordinator):
         )
         self.api = api
         self.currency = currency
+        self.is_metal = currency in METAL_CODES
 
     async def _async_update_data(self) -> RateData:
         try:
-            rates = await self.api.async_get_rates()
-        except CbrApiError as err:
+            rates = await self.api.async_get_daily_rates()
+        except XmlApiError as err:
             raise UpdateFailed(str(err)) from err
+
+        if self.is_metal:
+            metal = rates.metals.get(self.currency)
+            if metal is None:
+                raise UpdateFailed(f"ЦБ не публикует цену {self.currency}")
+            return RateData(
+                rate=metal.price,
+                name=metal.name,
+                nominal=1,
+                value=metal.price,
+                date=rates.date,
+                unit=METALS_BY_CODE[
+                    "1" if self.currency == METAL_GOLD_CODE else "2"
+                ][1],
+            )
 
         item = rates.currencies.get(self.currency)
         if item is None:
             raise UpdateFailed(f"ЦБ больше не публикует {self.currency}")
-
+        name, nominal, rate = item
         return RateData(
-            rate=item.rate,
-            name=item.name,
-            nominal=item.nominal,
-            value=item.value,
+            rate=rate,
+            name=name,
+            nominal=nominal,
+            value=round(rate * nominal, 4),
             date=rates.date,
+            unit="RUB",
         )

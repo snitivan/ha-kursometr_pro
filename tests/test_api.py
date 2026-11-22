@@ -2,72 +2,105 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.kursometr.api import CbrApi, CbrInvalidResponseError, CbrRates
+from custom_components.kursometr.xml_api import (
+    CbrXmlApi,
+    DailyRates,
+    MetalRate,
+    XmlInvalidResponseError,
+)
 
-PAYLOAD = {
-    "Date": "2026-11-19T11:30:00+03:00",
-    "Valute": {
-        "USD": {
-            "CharCode": "USD",
-            "Nominal": 1,
-            "Name": "Доллар США",
-            "Value": 82.2281,
-        },
-        "JPY": {
-            "CharCode": "JPY",
-            "Nominal": 100,
-            "Name": "Иен",
-            "Value": 51.5246,
-        },
-        "BROKEN": {"CharCode": "BROKEN", "Nominal": 0, "Name": "Брак", "Value": 1},
+RATES = DailyRates(
+    date="2026-11-20",
+    currencies={
+        "USD": ("Доллар США", 1, 82.2281),
+        "JPY": ("Иена", 100, 0.515246),
     },
-}
-
-
-class FakeResponse:
-    def raise_for_status(self):
-        pass
-
-    async def json(self, content_type=None):
-        return PAYLOAD
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc_info):
-        return False
-
-
-class FakeSession:
-    def get(self, *args, **kwargs):
-        return FakeResponse()
+    metals={
+        "GOLD": MetalRate("GOLD", "Золото", "RUB/g", 10926.51),
+        "SILVER": MetalRate("SILVER", "Серебро", "RUB/g", 139.67),
+    },
+)
 
 
 def make_api():
-    return CbrApi(FakeSession())
+    return CbrXmlApi(None)
 
 
-async def test_async_get_rates_normalizes_nominal():
-    rates = await make_api().async_get_rates()
+async def test_async_get_options_includes_metals():
+    api = make_api()
+    with patch.object(api, "async_get_daily_rates", return_value=RATES):
+        options = await api.async_get_options()
 
-    assert isinstance(rates, CbrRates)
-    assert rates.date == PAYLOAD["Date"]
-    assert rates.currencies["USD"].rate == pytest.approx(82.2281)
-    assert rates.currencies["JPY"].rate == pytest.approx(0.515246)
-    assert rates.currencies["JPY"].nominal == 100
-    assert rates.currencies["JPY"].value == pytest.approx(51.5246)
-    assert "BROKEN" not in rates.currencies
-
-
-async def test_async_get_currencies():
-    assert await make_api().async_get_currencies() == {
+    assert options == {
         "USD": "Доллар США",
-        "JPY": "Иен",
+        "JPY": "Иена",
+        "GOLD": "Золото",
+        "SILVER": "Серебро",
     }
 
 
-async def test_missing_valute_raises():
+async def test_missing_currency_raises():
     api = make_api()
-    with patch.object(api, "async_get_payload", return_value={"Date": "x"}):
-        with pytest.raises(CbrInvalidResponseError):
-            await api.async_get_rates()
+    empty = DailyRates(date="2026-11-20", currencies={}, metals={})
+    with patch.object(api, "async_get_daily_rates", return_value=empty):
+        # пустой список опций допустим (валидны только металлы)
+        assert await api.async_get_options() == {}
+
+    # а координатор на незнакомом коде должен упасть с UpdateFailed
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+    from custom_components.kursometr.coordinator import KursometrCoordinator
+
+    coordinator = KursometrCoordinator.__new__(KursometrCoordinator)
+    coordinator.api = api
+    coordinator.currency = "ZZZ"
+    coordinator.is_metal = False
+    with patch.object(api, "async_get_daily_rates", return_value=empty):
+        with pytest.raises(UpdateFailed):
+            await KursometrCoordinator._async_update_data(coordinator)
+
+
+async def test_coordinator_metal_without_prices_raises():
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+    from custom_components.kursometr.coordinator import KursometrCoordinator
+
+    api = make_api()
+    no_metals = DailyRates(date="2026-11-20", currencies={}, metals={})
+    coordinator = KursometrCoordinator.__new__(KursometrCoordinator)
+    coordinator.api = api
+    coordinator.currency = "GOLD"
+    coordinator.is_metal = True
+    with patch.object(api, "async_get_daily_rates", return_value=no_metals):
+        with pytest.raises(UpdateFailed):
+            await KursometrCoordinator._async_update_data(coordinator)
+
+
+async def test_empty_curs_on_date_raises():
+    from custom_components.kursometr.xml_api import CbrXmlApi as _Api
+
+    class EmptyCursSession:
+        class Resp:
+            def raise_for_status(self):
+                pass
+
+            async def text(self):
+                return (
+                    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+                    '<soap:Body><GetCursOnDateXMLResponse xmlns="http://web.cbr.ru/">'
+                    "<GetCursOnDateXMLResult><ValuteData /></GetCursOnDateXMLResult>"
+                    "</GetCursOnDateXMLResponse></soap:Body></soap:Envelope>"
+                )
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+        def post(self, *args, **kwargs):
+            return self.Resp()
+
+    api = _Api(EmptyCursSession())
+    from datetime import date as _date
+
+    with pytest.raises(XmlInvalidResponseError):
+        await api.async_get_currencies_on_date(_date(2026, 11, 20))
