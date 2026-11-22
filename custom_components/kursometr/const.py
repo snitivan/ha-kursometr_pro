@@ -18,6 +18,12 @@ METALS_BY_CODE = {
     "2": ("Серебро", "RUB/g"),
 }
 
+# Специальный код -> его отображаемое имя.
+METAL_NAMES = {
+    METAL_GOLD_CODE: METALS_BY_CODE["1"][0],
+    METAL_SILVER_CODE: METALS_BY_CODE["2"][0],
+}
+
 METAL_CODES = (METAL_GOLD_CODE, METAL_SILVER_CODE)
 
 DEFAULT_SCAN_INTERVAL = 3600
