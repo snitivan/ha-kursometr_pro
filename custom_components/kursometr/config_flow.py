@@ -16,7 +16,7 @@ from homeassistant.config_entries import (
     ConfigFlow,
     OptionsFlowWithConfigEntry,
 )
-from homeassistant.const import CONF_SCAN_INTERVAL
+from homeassistant.const import CONF_SCAN_INTERVAL, SOURCE_USER
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
@@ -132,19 +132,24 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors[CONF_CURRENCY] = "all_configured"
                 else:
                     # Первый инструмент создаём этим потоком; остальные
-                    # добавляются продолжением же потока (шаг "more") —
-                    # так HA не ругается на параллельные потоки домена.
+                    # добавляет шаг "more" — так можно отметить сразу
+                    # несколько валют и металлов в одном окне мастера.
                     first = new_codes[0]
                     await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
                     self._abort_if_unique_id_configured()
                     self._pending = [(c, interval) for c in new_codes[1:]]
-                    return self.async_create_entry(
+                    result = self.async_create_entry(
                         title=f"{first} → RUB",
                         data={
                             CONF_CURRENCY: first,
                             CONF_SCAN_INTERVAL: interval,
                         },
                     )
+                    if self._pending:
+                        # Продолжение очереди запускаем фоном после того,
+                        # как HA завершит текущий поток.
+                        self.hass.async_create_task(self._async_process_pending())
+                    return result
 
         try:
             currencies = await CbrXmlApi(
@@ -178,21 +183,24 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_more(self, user_input=None) -> FlowResult:
-        """Добавляет следующий инструмент из очереди множественного выбора."""
-        if not self._pending:
-            return self.async_abort(reason="complete")
-        currency, interval = self._pending.pop(0)
-        await self.async_set_unique_id(f"{DOMAIN}_{currency.lower()}")
-        self._abort_if_unique_id_configured()
-        result = self.async_create_entry(
-            title=f"{currency} → RUB",
-            data={CONF_CURRENCY: currency, CONF_SCAN_INTERVAL: interval},
-        )
-        # Продолжаем поток, пока очередь не пуста: HA вызывает next_step
-        # автоматически для результатов CREATE_ENTRY у незавершённого потока?
-        # Нет — вместо этого возвращаем show_progress-цепочку через re-init.
-        return result
+    async def _async_process_pending(self) -> None:
+        """Создаёт config entries для инструментов, отмеченных дополнительно."""
+        manager = self.hass.config_entries
+        while self._pending:
+            currency, interval = self._pending.pop(0)
+            unique_id = f"{DOMAIN}_{currency.lower()}"
+            if any(e.unique_id == unique_id for e in manager._async_entries):
+                continue
+            manager.add(
+                ConfigEntry(
+                    unique_id=unique_id,
+                    domain=DOMAIN,
+                    title=f"{currency} → RUB",
+                    version=1,
+                    source=SOURCE_USER,
+                    data={CONF_CURRENCY: currency, CONF_SCAN_INTERVAL: interval},
+                )
+            )
 
     @staticmethod
     @callback
