@@ -1,11 +1,11 @@
 {
   "domain": "kursometr",
-  "name": "Курсометр",
+  "name": "Курс ЦБ РФ",
   "codeowners": [
     "@Type7178"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/Type7178/ha-kursometr",
+  "documentation": "https://github.com/snitivan/ha-kursometr_pro",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Type7178/ha-kursometr/issues",

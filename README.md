@@ -1,6 +1,6 @@
 ![Описание картинки](screenshots/1.png)
-# Курсометр
-Небольшая интеграция для Home Assistant, которая позволяет видеть курсы любых валют в вашем HA (создает сенсоры). Данные берет из API ЦБ РФ.
+# Курсы ЦБ РФ
+Небольшая интеграция для Home Assistant, которая позволяет видеть курсы любых валют, а также золота и серебра, в вашем HA (создает сенсоры). Данные берет из официального API ЦБ РФ.
 
 [![Добавить в Home Assistant](https://img.shields.io/badge/%D0%94%D0%BE%D0%B1%D0%B0%D0%B2%D0%B8%D1%82%D1%8C_%D0%B2-Home_Assistant-41BDF5?style=for-the-badge&logo=homeassistant&logoColor=white)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Type7178&repository=ha-kursometr&category=integration)
 
@@ -11,7 +11,7 @@
 
 1. Перейдите в Настройки → Marketplace.
 2. Нажмите "Добавить по ссылке".
-3. Введите https://github.com/Type7178/ha-kursometr/
+3. Введите https://github.com/snitivan/ha-kursometr_pro
 4. Перейдите в раздел "Просмотр" и введите "Курсометр".
 5. Установите интеграцию (⋮ → Установить).
 6. Перед вами должно открыться окно мастера настройки. Если оно не открылось, перейдите в Настройки → Устройства и службы → Добавить интеграцию и введите "Курсометр".
