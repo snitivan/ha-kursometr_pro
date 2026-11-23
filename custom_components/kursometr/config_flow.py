@@ -1,13 +1,20 @@
 """Мастер настройки Курсометра.
 
-Выбор инструментов реализован списком с множественным выбором и
-заголовками-разделителями («Валюты» / «Драгметаллы»): нативных групп в
-селекторе HA нет, а заголовки отбрасываются при сохранении. Отметить
-можно сразу несколько пунктов — на каждый создаётся отдельная запись
-config entry (со своими сенсорами «текущий», «вчера», «завтра»).
+Множественное добавление инструментов (валют и драгметаллов) реализовано
+через стандартный механизм Home Assistant: первый выбранный инструмент
+создаётся текущим потоком настройки, а для каждого последующего мастер
+показывает шаг подтверждения ``more_info`` — официальный способ создавать
+несколько config entries из одного потока (без фоновых задач и внутренних
+API).
+
+Выбор разделён на категории «Валюты» и «Драгметаллы»: нативных групп в
+селекторе HA нет, поэтому каждый блок подписан строкой-заголовком.
+Заголовки не являются инструментами и отбрасываются при сохранении.
 """
 
 from __future__ import annotations
+
+from types import MappingProxyType
 
 import voluptuous as vol
 
@@ -55,12 +62,7 @@ def _interval_selector() -> selector.NumberSelector:
 
 
 def _currency_selector(currencies: dict[str, str]) -> selector.SelectSelector:
-    """Выпадающий список из валют и металлов с разделением по категориям.
-
-    Сначала идут валюты, затем драгметаллы — каждый блок подписан своей
-    строкой-заголовком. Заголовки не являются инструментами и
-    отбрасываются при сохранении.
-    """
+    """Список с множественным выбором: сначала валюты, затем металлы."""
     options: list[dict] = [
         {"value": "__header_currencies__", "label": "— Валюты —"}
     ]
@@ -87,22 +89,19 @@ HEADER_VALUES = frozenset({"__header_currencies__", "__header_metals__"})
 
 
 def _label_of(code: str, currencies: dict[str, str]) -> str:
-    """Человекочитаемое имя инструмента для заголовка шага «more»."""
+    """Человекочитаемое имя инструмента для шага подтверждения."""
     if code in METAL_NAMES:
         return f"{code} — {METAL_NAMES[code]}"
-    name = currencies.get(code)
-    if name is None:
-        # Краткий ISO-код без описания (например, AED) — ищем в fallback.
-        name = FALLBACK_CURRENCIES.get(code, code)
-    return f"{code} — {name}"
+    name = currencies.get(code) or FALLBACK_CURRENCIES.get(code)
+    return f"{code} — {name}" if name else code
 
 
 def _clean_selection(raw) -> list[str]:
-    """Реальные коды из выбора пользователя (заголовки-разделители отбрасываются)."""
+    """Реальные коды из выбора пользователя (заголовки отбрасываются)."""
     items = raw if isinstance(raw, (list, tuple)) else [raw]
     codes: list[str] = []
     for item in items:
-        code = str(item).upper()
+        code = str(item).strip().upper()
         if code in HEADER_VALUES or not code:
             continue
         if code not in codes:
@@ -112,15 +111,15 @@ def _clean_selection(raw) -> list[str]:
 
 class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
-    supports_multiple_instances = True
 
     def __init__(self) -> None:
-        # Инструменты, оставшиеся «в очереди» после создания первой записи
-        # при множественном выборе (см. async_step_user / async_step_more).
+        # Очередь инструментов, оставшихся после создания первой записи
+        # (см. async_step_user / async_step_more_info).
         self._pending: list[tuple[str, int]] = []
-        # Имена инструментов для шага "more" (если API был недоступен —
-        # заполнятся fallback-списком).
+        # Имена инструментов для шага подтверждения.
         self._names: dict[str, str] = {}
+        # Уже созданные этим потоком записи (кроме финальной).
+        self._created: list[ConfigEntry] = []
 
     async def _async_names(self) -> dict[str, str]:
         """Валюты для селектора; при недоступности ЦБ — fallback-список."""
@@ -134,7 +133,7 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         return currencies
 
     async def async_step_user(self, user_input=None) -> FlowResult:
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             codes = _clean_selection(user_input[CONF_CURRENCY])
@@ -146,22 +145,22 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 configured = {
                     (e.data.get(CONF_CURRENCY) or "").upper()
-                    for e in self._async_current_entries(include_ignore=False)
+                    for e in self._async_current_entries()
                 }
                 new_codes = [c for c in codes if c not in configured]
                 if not new_codes:
-                    errors[CONF_CURRENCY] = "all_configured"
-                else:
-                    # Первый инструмент создаём этим потоком; остальные
-                    # добавляет шаг "more" — так можно отметить сразу
-                    # несколько валют и металлов в одном окне мастера.
-                    first = new_codes[0]
-                    await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
-                    self._abort_if_unique_id_configured()
-                    self._pending = [(c, interval) for c in new_codes[1:]]
-                    if self._pending:
-                        return await self.async_step_more()
-                    return self._create_entry(first, interval)
+                    # Все отмеченные инструменты уже измеряются.
+                    return self.async_abort(reason="already_configured")
+                # Первый инструмент создаётся сразу и добавляется в HA;
+                # очередь остальных обрабатывает шаг more_info.
+                first = new_codes[0]
+                await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
+                self._abort_if_unique_id_configured()
+                self._pending = [(c, interval) for c in new_codes[1:]]
+                if self._pending:
+                    await self._async_add_immediate(first, interval)
+                    return await self.async_step_more_info()
+                return self._create_entry(first, interval)
 
         currencies = await self._async_names()
 
@@ -200,26 +199,56 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_more(self, user_input=None) -> FlowResult:
-        """Продолжение мастера: добавляет оставшиеся отмеченные инструменты.
+    async def _async_add_immediate(self, currency: str, interval: int) -> None:
+        """Добавляет запись сразу, не завершая поток.
 
-        Это официальный механизм HA для последовательного создания
-        нескольких записей из одного потока — никаких внутренних API и
-        фоновых задач.
+        При множественном выборе первый инструмент должен появиться в HA
+        немедленно (иначе пользователь увидит «ничего не создалось» после
+        закрытия мастера). Финальная запись создаётся стандартным
+        async_create_entry на последнем шаге more_info.
         """
-        pending_currency, pending_interval = self._pending[0]
+        from homeassistant.config_entries import ConfigEntry  # local re-import
+
+        unique_id = f"{DOMAIN}_{currency.lower()}"
+        if self.hass.config_entries.async_entry_for_domain_unique_id(
+            DOMAIN, unique_id
+        ):
+            return
+        entry = ConfigEntry(
+            data={CONF_CURRENCY: currency, CONF_SCAN_INTERVAL: interval},
+            discovery_keys=MappingProxyType({}),
+            domain=DOMAIN,
+            minor_version=1,
+            options={},
+            source=self.source,
+            title=f"{currency} → RUB",
+            unique_id=unique_id,
+            version=self.VERSION,
+        )
+        await self.hass.config_entries.async_add(entry)
+        self._created.append(entry)
+
+    async def async_step_more_info(self, user_input=None) -> FlowResult:
+        """Подтверждение добавления следующего выбранного инструмента.
+
+        Промежуточные подтверждения создают записи напрямую (мастер уже
+        показал их пользователю в исходной форме), финальное — отдаёт
+        обычный async_create_entry, завершающий поток.
+        """
+        currency, interval = self._pending[0]
 
         if user_input is not None:
             self._pending.pop(0)
             if self._pending:
-                return await self.async_step_more()
-            return self._create_entry(pending_currency, pending_interval)
+                await self._async_add_immediate(currency, interval)
+                return await self.async_step_more_info()
+            return self._create_entry(currency, interval)
 
         return self.async_show_form(
-            step_id="more",
+            step_id="more_info",
             description_placeholders={
-                "currency": _label_of(pending_currency, self._names),
-                "left": str(len(self._pending)),
+                "currency": _label_of(currency, self._names),
+                "left": str(len(self._pending) - 1),
             },
         )
 
@@ -246,15 +275,31 @@ class KursometrOptionsFlow(OptionsFlowWithConfigEntry):
                 errors[CONF_SCAN_INTERVAL] = "invalid_interval"
             else:
                 currency = codes[0]
+                changed_currency = (
+                    currency
+                    != (self.config_entry.data.get(CONF_CURRENCY) or "").upper()
+                )
+                new_data = {**self.config_entry.data, CONF_CURRENCY: currency}
+                new_options = {
+                    **self.config_entry.options,
+                    CONF_SCAN_INTERVAL: interval,
+                }
+                new_unique_id = (
+                    f"{DOMAIN}_{currency.lower()}"
+                    if changed_currency
+                    else self.config_entry.unique_id
+                )
+                new_title = (
+                    f"{currency} → RUB"
+                    if changed_currency
+                    else self.config_entry.title
+                )
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
-                    unique_id=f"{DOMAIN}_{currency.lower()}",
-                    title=f"{currency} → RUB",
-                    data={**self.config_entry.data, CONF_CURRENCY: currency},
-                    options={
-                        **self.config_entry.options,
-                        CONF_SCAN_INTERVAL: interval,
-                    },
+                    unique_id=new_unique_id,
+                    title=new_title,
+                    data=new_data,
+                    options=new_options,
                 )
                 return self.async_create_entry(title="", data={})
 
@@ -280,7 +325,9 @@ class KursometrOptionsFlow(OptionsFlowWithConfigEntry):
                     vol.Required(CONF_CURRENCY, default=selected): _currency_selector(
                         currencies
                     ),
-                    vol.Required(CONF_SCAN_INTERVAL, default=interval): _interval_selector(),
+                    vol.Required(
+                        CONF_SCAN_INTERVAL, default=interval
+                    ): _interval_selector(),
                 }
             ),
             errors=errors,
