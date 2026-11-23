@@ -16,6 +16,10 @@
           "currency": "Инструмент",
           "scan_interval": "Интервал обновления (секунды)"
         }
+      },
+      "more": {
+        "title": "Adding the next instrument",
+        "description": "An entry for **{currency}** will be created. Remaining to add: {left}. Press Submit to continue."
       }
     },
     "error": {

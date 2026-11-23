@@ -62,7 +62,7 @@ async def test_selecting_only_header_is_error(hass):
     with patch(
         "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
-    ):
+    ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -71,15 +71,36 @@ async def test_selecting_only_header_is_error(hass):
             {CONF_CURRENCY: ["__header_metals__"], CONF_SCAN_INTERVAL: 3600},
         )
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_CURRENCY: "invalid_selection"}
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {CONF_CURRENCY: "invalid_selection"}
+
+        # выбор корректного инструмента после ошибки работает;
+        # повторный выбор того же — abort already_configured
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_CURRENCY: ["USD"], CONF_SCAN_INTERVAL: 3600},
+        )
+        await hass.async_block_till_done()
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+
+        result2 = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        result2 = await hass.config_entries.flow.async_configure(
+            result2["flow_id"],
+            {CONF_CURRENCY: ["USD"], CONF_SCAN_INTERVAL: 3600},
+        )
+        assert result2["type"] is FlowResultType.ABORT
+        assert result2["reason"] == "already_configured"
 
 
-async def test_selecting_two_instruments_is_error(hass):
+async def test_selecting_two_instruments_creates_both(hass):
+    """Множественный выбор: после первого entry мастер шагами "more"
+    добавляет остальные инструменты."""
     with patch(
         "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
-    ):
+    ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -87,9 +108,40 @@ async def test_selecting_two_instruments_is_error(hass):
             result["flow_id"],
             {CONF_CURRENCY: ["USD", "GOLD"], CONF_SCAN_INTERVAL: 3600},
         )
+        # первый инструмент создан сразу
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_CURRENCY] == "USD"
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_CURRENCY: "invalid_selection"}
+        # второй — через подтверждающий шаг "more"
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_CURRENCY: ["EUR", "JPY", "GOLD"], CONF_SCAN_INTERVAL: 3600},
+        )
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_CURRENCY] == "EUR"
+
+        for expected in ("JPY", "GOLD"):
+            result = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {}
+            )
+            if result["type"] is FlowResultType.FORM:
+                assert result["step_id"] == "more"
+                result = await hass.config_entries.flow.async_configure(
+                    result["flow_id"], {}
+                )
+            assert result["type"] is FlowResultType.CREATE_ENTRY, expected
+            assert result["data"][CONF_CURRENCY] == expected, expected
+
+        await hass.async_block_till_done()
+
+    configured = sorted(
+        e.data[CONF_CURRENCY]
+        for e in hass.config_entries.async_entries(DOMAIN)
+    )
+    assert configured == ["EUR", "GOLD", "JPY", "USD"]
 
 
 async def test_gold_can_be_selected(hass):

@@ -215,17 +215,13 @@ class CbrXmlApi:
 
         return DailyRates(date=latest, currencies=currencies, metals=metals)
 
-    async def async_get_yesterday_rates(self) -> DailyRates:
-        """Курсы за предыдущий рабочий день (суббота/воскресенье -> пятница)."""
+    async def async_get_yesterday_rates(self) -> DailyRates | None:
+        """Курсы за предыдущий рабочий день относительно последней даты ЦБ.
+
+        ``None`` — если ЦБ не публикует курсы на эту дату (праздники).
+        """
         latest = date.fromisoformat(await self.async_get_latest_date())
-        prev = previous_weekday(latest)
-        prev_iso = prev.isoformat()
-        currencies = await self.async_get_currencies_on_date(prev)
-        try:
-            metals = await self.async_get_metals_range(prev)
-        except XmlApiError:
-            metals = {}
-        return DailyRates(date=prev_iso, currencies=currencies, metals=metals)
+        return await self.async_get_rates_on_date(previous_weekday(latest))
 
     async def async_get_rates_on_date(self, day: date) -> DailyRates | None:
         """Курсы на произвольную дату; ``None`` — если ЦБ их не публикует."""

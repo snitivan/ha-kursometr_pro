@@ -9,6 +9,8 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Type7178/ha-kursometr/issues",
-  "requirements": [],
+  "requirements": [
+    "homeassistant"
+  ],
   "version": "1.0.3"
 }
