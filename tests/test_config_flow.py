@@ -95,8 +95,8 @@ async def test_selecting_only_header_is_error(hass):
 
 
 async def test_selecting_two_instruments_creates_both(hass):
-    """Множественный выбор: после первого entry мастер шагами "more"
-    добавляет остальные инструменты."""
+    """Множественный выбор: первый инструмент создаётся сразу, остальные —
+    подтверждающими шагами more_info того же потока."""
     with patch(
         "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
@@ -108,11 +108,10 @@ async def test_selecting_two_instruments_creates_both(hass):
             result["flow_id"],
             {CONF_CURRENCY: ["USD", "GOLD"], CONF_SCAN_INTERVAL: 3600},
         )
-        # первый инструмент создан сразу
+        # Первый инструмент создан сразу
         assert result["type"] is FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_CURRENCY] == "USD"
 
-        # второй — через подтверждающий шаг "more"
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -128,7 +127,7 @@ async def test_selecting_two_instruments_creates_both(hass):
                 result["flow_id"], {}
             )
             if result["type"] is FlowResultType.FORM:
-                assert result["step_id"] == "more"
+                assert result["step_id"] == "more_info"
                 result = await hass.config_entries.flow.async_configure(
                     result["flow_id"], {}
                 )
