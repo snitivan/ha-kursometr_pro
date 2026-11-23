@@ -141,6 +141,8 @@ class KursometrCoordinator(DataUpdateCoordinator):
         except XmlApiError as err:
             _LOGGER.debug("Вчерашний курс %s недоступен: %s", self.currency, err)
             return None
+        if rates is None:
+            return None
         data = _extract(rates, self.currency, self.is_metal)
         if data is not None:
             self._remember(data)
