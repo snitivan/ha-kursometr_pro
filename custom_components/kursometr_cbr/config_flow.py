@@ -101,9 +101,12 @@ def _clean_selection(raw) -> list[str]:
     items = raw if isinstance(raw, (list, tuple)) else [raw]
     codes: list[str] = []
     for item in items:
-        code = str(item).strip().upper()
-        if code in HEADER_VALUES or not code:
+        raw_code = str(item).strip()
+        # Регистронезависимая проверка заголовков-разделителей: приводить к
+        # upper() до сравнения нельзя, т.к. значения заголовков нижнего регистра.
+        if raw_code.lower() in HEADER_VALUES or not raw_code:
             continue
+        code = raw_code.upper()
         if code not in codes:
             codes.append(code)
     return codes
@@ -151,8 +154,10 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not new_codes:
                     # Все отмеченные инструменты уже измеряются.
                     return self.async_abort(reason="already_configured")
-                # Первый инструмент создаётся сразу и добавляется в HA;
-                # очередь остальных обрабатывает шаг more_info.
+                # Первый инструмент создаётся сразу и добавляется в HA,
+                # остальные — подтверждающими шагами more_info того же
+                # потока; финальный завершается стандартным
+                # async_create_entry.
                 first = new_codes[0]
                 await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
                 self._abort_if_unique_id_configured()
@@ -240,7 +245,8 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._pending.pop(0)
             if self._pending:
-                await self._async_add_immediate(currency, interval)
+                # Подтверждаем создание текущего инструмента и продолжаем
+                # очередь в этом же потоке.
                 return await self.async_step_more_info()
             return self._create_entry(currency, interval)
 
@@ -299,9 +305,11 @@ class KursometrOptionsFlow(OptionsFlowWithConfigEntry):
                     unique_id=new_unique_id,
                     title=new_title,
                     data=new_data,
-                    options=new_options,
                 )
-                return self.async_create_entry(title="", data={})
+                # async_create_entry в options-потоке сохраняет поле data как
+                # entry.options; передаём его явно — иначе пустой {} затрёт
+                # настройки при перезагрузке записи.
+                return self.async_create_entry(title="", data=new_options)
 
         selected = [self.config_entry.data[CONF_CURRENCY]]
         interval = int(

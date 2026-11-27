@@ -96,7 +96,8 @@ async def test_selecting_only_header_is_error(hass):
 
 async def test_selecting_two_instruments_creates_both(hass):
     """Множественный выбор: первый инструмент создаётся сразу, остальные —
-    подтверждающими шагами more_info того же потока."""
+    подтверждающими шагами more_info того же потока; финальный шаг завершает
+    мастер стандартным CREATE_ENTRY."""
     with patch(
         "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
@@ -108,31 +109,29 @@ async def test_selecting_two_instruments_creates_both(hass):
             result["flow_id"],
             {CONF_CURRENCY: ["USD", "GOLD"], CONF_SCAN_INTERVAL: 3600},
         )
-        # Первый инструмент создан сразу
+        # Первый инструмент (USD) создан сразу, мастер подтверждает GOLD
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "more_info"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {}
+        )
         assert result["type"] is FlowResultType.CREATE_ENTRY
-        assert result["data"][CONF_CURRENCY] == "USD"
+        assert result["data"][CONF_CURRENCY] == "GOLD"
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_CURRENCY: ["EUR", "JPY", "GOLD"], CONF_SCAN_INTERVAL: 3600},
+            {CONF_CURRENCY: ["EUR", "JPY"], CONF_SCAN_INTERVAL: 3600},
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "more_info"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {}
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY
-        assert result["data"][CONF_CURRENCY] == "EUR"
-
-        for expected in ("JPY", "GOLD"):
-            result = await hass.config_entries.flow.async_configure(
-                result["flow_id"], {}
-            )
-            if result["type"] is FlowResultType.FORM:
-                assert result["step_id"] == "more_info"
-                result = await hass.config_entries.flow.async_configure(
-                    result["flow_id"], {}
-                )
-            assert result["type"] is FlowResultType.CREATE_ENTRY, expected
-            assert result["data"][CONF_CURRENCY] == expected, expected
+        assert result["data"][CONF_CURRENCY] == "JPY"
 
         await hass.async_block_till_done()
 
