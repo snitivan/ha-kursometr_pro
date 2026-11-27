@@ -1,4 +1,4 @@
-"""Мастер настройки Курсометра.
+"""Мастер настройки Курса ЦБ РФ.
 
 Множественное добавление инструментов (валют и драгметаллов): каждый
 отмеченный инструмент подтверждается шагом ``more_info``, после чего его
@@ -219,7 +219,7 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         # Данные заглушки минимально валидны (схема записи требует строку),
         # но запись сразу удаляется — setup для неё не успевает запуститься.
         result = self.async_create_entry(
-            title="Курсометр",
+            title="Курс ЦБ РФ",
             data={CONF_CURRENCY: "", CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL},
         )
         entry = result.get("result")
