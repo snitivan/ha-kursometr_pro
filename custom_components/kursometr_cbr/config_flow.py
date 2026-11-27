@@ -1,11 +1,12 @@
 """Мастер настройки Курсометра.
 
-Множественное добавление инструментов (валют и драгметаллов) реализовано
-через стандартный механизм Home Assistant: первый выбранный инструмент
-создаётся текущим потоком настройки, а для каждого последующего мастер
-показывает шаг подтверждения ``more_info`` — официальный способ создавать
-несколько config entries из одного потока (без фоновых задач и внутренних
-API).
+Множественное добавление инструментов (валют и драгметаллов): каждый
+отмеченный инструмент подтверждается шагом ``more_info``, после чего его
+config entry создаётся напрямую через ``hass.config_entries.async_add``.
+В конце мастер возвращает служебную запись-заглушку с пустыми данными и
+сразу удаляет её — это позволяет завершить один поток ровно одним
+CREATE_ENTRY, не теряя при этом ни одного выбранного инструмента
+(ограничение HA: flow может создать только одну запись).
 
 Выбор разделён на категории «Валюты» и «Драгметаллы»: нативных групп в
 селекторе HA нет, поэтому каждый блок подписан строкой-заголовком.
@@ -154,18 +155,21 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not new_codes:
                     # Все отмеченные инструменты уже измеряются.
                     return self.async_abort(reason="already_configured")
-                # Первый инструмент создаётся сразу и добавляется в HA,
-                # остальные — подтверждающими шагами more_info того же
-                # потока; финальный завершается стандартным
-                # async_create_entry.
-                first = new_codes[0]
-                await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
-                self._abort_if_unique_id_configured()
-                self._pending = [(c, interval) for c in new_codes[1:]]
-                if self._pending:
-                    await self._async_add_immediate(first, interval)
-                    return await self.async_step_more_info()
-                return self._create_entry(first, interval)
+                if len(new_codes) == 1:
+                    # Единственный инструмент — стандартное завершение потока.
+                    first = new_codes[0]
+                    await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
+                    self._abort_if_unique_id_configured()
+                    # Уникальный id занят только что созданной потоком записью
+                    # (вариант с подтверждением через more_info).
+                    if self._async_current_entries(include_ignore=False):
+                        return self.async_abort(reason="already_configured")
+                    return self._create_entry(first, interval)
+                # Несколько инструментов: каждый подтверждается своим шагом
+                # more_info и создаётся напрямую; поток завершается служебной
+                # записью-заглушкой, которая сразу удаляется.
+                self._pending = [(c, interval) for c in new_codes]
+                return await self.async_step_more_info()
 
         currencies = await self._async_names()
 
@@ -204,6 +208,27 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    def _dummy_result(self) -> FlowResult:
+        """Финальный результат потока: служебная запись без данных.
+
+        HA требует, чтобы config flow завершился ровно одним CREATE_ENTRY.
+        Все реально выбранные инструменты уже добавлены через
+        _async_add_immediate, поэтому заглушка сразу удаляется — она нужна
+        лишь для корректного закрытия мастера.
+        """
+        # Данные заглушки минимально валидны (схема записи требует строку),
+        # но запись сразу удаляется — setup для неё не успевает запуститься.
+        result = self.async_create_entry(
+            title="Курсометр",
+            data={CONF_CURRENCY: "", CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL},
+        )
+        entry = result.get("result")
+        if entry is not None:
+            self.hass.async_create_task(
+                self.hass.config_entries.async_remove(entry.entry_id)
+            )
+        return result
+
     async def _async_add_immediate(self, currency: str, interval: int) -> None:
         """Добавляет запись сразу, не завершая поток.
 
@@ -236,19 +261,24 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_more_info(self, user_input=None) -> FlowResult:
         """Подтверждение добавления следующего выбранного инструмента.
 
-        Промежуточные подтверждения создают записи напрямую (мастер уже
-        показал их пользователю в исходной форме), финальное — отдаёт
-        обычный async_create_entry, завершающий поток.
+        Каждое подтверждение создаёт config entry напрямую; когда очередь
+        пуста, поток завершается служебной записью-заглушкой, которая
+        сразу удаляется (реальные данные уже сохранены в своих записях).
         """
-        currency, interval = self._pending[0]
-
         if user_input is not None:
-            self._pending.pop(0)
+            if not self._pending:
+                return self._dummy_result()
+            currency, interval = self._pending.pop(0)
+            await self._async_add_immediate(currency, interval)
             if self._pending:
-                # Подтверждаем создание текущего инструмента и продолжаем
-                # очередь в этом же потоке.
+                # Подтверждаем создание следующего инструмента.
                 return await self.async_step_more_info()
-            return self._create_entry(currency, interval)
+            return self._dummy_result()
+
+        if not self._pending:
+            return self._dummy_result()
+
+        currency, interval = self._pending[0]
 
         return self.async_show_form(
             step_id="more_info",
