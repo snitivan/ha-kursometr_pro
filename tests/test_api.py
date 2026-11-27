@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.kursometr.xml_api import (
+from custom_components.kursometr_cbr.xml_api import (
     CbrXmlApi,
     DailyRates,
     MetalRate,
@@ -48,7 +48,7 @@ async def test_missing_currency_raises():
 
     # а координатор на незнакомом коде должен упасть с UpdateFailed
     from homeassistant.helpers.update_coordinator import UpdateFailed
-    from custom_components.kursometr.coordinator import KursometrCoordinator
+    from custom_components.kursometr_cbr.coordinator import KursometrCoordinator
 
     coordinator = KursometrCoordinator.__new__(KursometrCoordinator)
     coordinator.api = api
@@ -61,7 +61,7 @@ async def test_missing_currency_raises():
 
 async def test_coordinator_metal_without_prices_raises():
     from homeassistant.helpers.update_coordinator import UpdateFailed
-    from custom_components.kursometr.coordinator import KursometrCoordinator
+    from custom_components.kursometr_cbr.coordinator import KursometrCoordinator
 
     api = make_api()
     no_metals = DailyRates(date="2026-11-20", currencies={}, metals={})
@@ -75,7 +75,7 @@ async def test_coordinator_metal_without_prices_raises():
 
 
 async def test_empty_curs_on_date_raises():
-    from custom_components.kursometr.xml_api import CbrXmlApi as _Api
+    from custom_components.kursometr_cbr.xml_api import CbrXmlApi as _Api
 
     class EmptyCursSession:
         class Resp:

@@ -5,7 +5,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from custom_components.kursometr.xml_api import (
+from custom_components.kursometr_cbr.xml_api import (
     CbrXmlApi,
     XmlConnectionError,
     XmlInvalidResponseError,
