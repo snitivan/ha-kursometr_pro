@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-DOMAIN = "kursometr"
+DOMAIN = "kursometr_cbr"
 CONF_CURRENCY = "currency"
 
 # Официальный SOAP-сервис Банка России (XML Web Service Daily Info).

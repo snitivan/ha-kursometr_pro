@@ -3,6 +3,7 @@ import socket
 import threading
 
 import aiohttp.resolver
+import homeassistant.helpers.aiohttp_client as _ha_client
 import pytest
 
 pytest_plugins = "pytest_homeassistant_custom_component"
@@ -10,10 +11,24 @@ pytest_plugins = "pytest_homeassistant_custom_component"
 
 # В CI-окружении установлен pycares 5.x, чей Channel.getaddrinfo() принимает
 # callback только именованным аргументом, тогда как aiodns 3.2 передаёт его
-# позиционно — любой фактический HTTP-запрос падает с TypeError. Тесты не
-# должны ходить в сеть, поэтому заставляем aiohttp использовать системный
-# резолвер вместо битого AsyncResolver (aiodns).
+# позиционно — любой фактический HTTP-запрос падает с TypeError. Home Assistant
+# конструирует коннекторы с ``resolver=AsyncResolver()`` напрямую (имя импортиро-
+# вано в модуль aiohttp_client), поэтому подменяем именно его на потоковый
+# ThreadedResolver: тесты не должны ходить в сеть, а DNS будет блокирован
+# фикстурой no_network ниже.
 aiohttp.resolver.DefaultResolver = aiohttp.resolver.ThreadedResolver
+
+
+class _SafeResolver(aiohttp.resolver.ThreadedResolver):
+    """ThreadedResolver без выхода в реальную сеть."""
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        if str(host) in ("127.0.0.1", "localhost", "::1"):
+            return await super().resolve(host, port, family)
+        raise OSError(f"Network access disabled in tests (host={host})")
+
+
+_ha_client.AsyncResolver = _SafeResolver
 
 
 @pytest.fixture(autouse=True)

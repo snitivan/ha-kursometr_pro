@@ -4,8 +4,8 @@ import pytest
 from homeassistant.const import CONF_SCAN_INTERVAL
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.kursometr.xml_api import DailyRates, MetalRate
-from custom_components.kursometr.const import ATTR_NOMINAL, CONF_CURRENCY, DOMAIN
+from custom_components.kursometr_cbr.xml_api import DailyRates, MetalRate
+from custom_components.kursometr_cbr.const import ATTR_NOMINAL, CONF_CURRENCY, DOMAIN
 
 RATES = DailyRates(
     date="2026-11-20",
@@ -35,7 +35,7 @@ async def test_setup_creates_sensor_with_attributes(hass):
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        "custom_components.kursometr_cbr.xml_api.CbrXmlApi.async_get_daily_rates",
         return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -56,7 +56,7 @@ async def test_setup_creates_sensor_with_attributes(hass):
     jpy_entry = make_entry("JPY")
     jpy_entry.add_to_hass(hass)
     with patch(
-        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        "custom_components.kursometr_cbr.xml_api.CbrXmlApi.async_get_daily_rates",
         return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(jpy_entry.entry_id)
@@ -73,7 +73,7 @@ async def test_setup_gold_sensor_uses_metal_price(hass):
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        "custom_components.kursometr_cbr.xml_api.CbrXmlApi.async_get_daily_rates",
         return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -93,7 +93,7 @@ async def test_unload_removes_coordinator(hass):
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        "custom_components.kursometr_cbr.xml_api.CbrXmlApi.async_get_daily_rates",
         return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -109,7 +109,7 @@ async def test_options_change_reloads_coordinator(hass):
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.xml_api.CbrXmlApi.async_get_daily_rates",
+        "custom_components.kursometr_cbr.xml_api.CbrXmlApi.async_get_daily_rates",
         return_value=RATES,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)

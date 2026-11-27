@@ -5,8 +5,8 @@ from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.kursometr.xml_api import XmlConnectionError
-from custom_components.kursometr.const import CONF_CURRENCY, DOMAIN
+from custom_components.kursometr_cbr.xml_api import XmlConnectionError
+from custom_components.kursometr_cbr.const import CONF_CURRENCY, DOMAIN
 
 CURRENCIES = {"USD": "Доллар США", "EUR": "Евро", "JPY": "Иена"}
 
@@ -21,7 +21,7 @@ def _select_options(result):
 
 async def test_user_flow_creates_entry(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -42,9 +42,9 @@ async def test_user_flow_creates_entry(hass):
     assert labels["SILVER"] == "SILVER — Серебро"
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
-    ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
+    ), patch("custom_components.kursometr_cbr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             # пользователь отмечает и заголовок категории, и валюту
@@ -55,14 +55,14 @@ async def test_user_flow_creates_entry(hass):
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "USD → RUB"
     assert result["data"] == {CONF_CURRENCY: "USD", CONF_SCAN_INTERVAL: 3600}
-    assert result["result"].unique_id == "kursometr_usd"
+    assert result["result"].unique_id == "kursometr_cbr_usd"
 
 
 async def test_selecting_only_header_is_error(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
-    ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
+    ), patch("custom_components.kursometr_cbr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -98,9 +98,9 @@ async def test_selecting_two_instruments_creates_both(hass):
     """Множественный выбор: первый инструмент создаётся сразу, остальные —
     подтверждающими шагами more_info того же потока."""
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
-    ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
+    ), patch("custom_components.kursometr_cbr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -145,9 +145,9 @@ async def test_selecting_two_instruments_creates_both(hass):
 
 async def test_gold_can_be_selected(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
-    ), patch("custom_components.kursometr.async_setup_entry", return_value=True):
+    ), patch("custom_components.kursometr_cbr.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -164,12 +164,12 @@ async def test_gold_can_be_selected(hass):
 async def test_duplicate_currency_is_aborted(hass):
     MockConfigEntry(
         domain=DOMAIN,
-        unique_id="kursometr_usd",
+        unique_id="kursometr_cbr_usd",
         data={CONF_CURRENCY: "USD", CONF_SCAN_INTERVAL: 3600},
     ).add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -186,7 +186,7 @@ async def test_duplicate_currency_is_aborted(hass):
 
 async def test_connection_error_shows_fallback_form(hass):
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         side_effect=XmlConnectionError("offline"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -204,13 +204,13 @@ async def test_connection_error_shows_fallback_form(hass):
 async def test_options_flow_updates_interval(hass):
     entry = MockConfigEntry(
         domain=DOMAIN,
-        unique_id="kursometr_eur",
+        unique_id="kursometr_cbr_eur",
         data={CONF_CURRENCY: "EUR", CONF_SCAN_INTERVAL: 3600},
     )
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
     ):
         result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -225,7 +225,7 @@ async def test_options_flow_updates_interval(hass):
     assert default == ["EUR"]
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
     ):
         result = await hass.config_entries.options.async_configure(
@@ -242,13 +242,13 @@ async def test_options_flow_updates_interval(hass):
 async def test_options_flow_changes_currency(hass):
     entry = MockConfigEntry(
         domain=DOMAIN,
-        unique_id="kursometr_eur",
+        unique_id="kursometr_cbr_eur",
         data={CONF_CURRENCY: "EUR", CONF_SCAN_INTERVAL: 3600},
     )
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.kursometr.config_flow.CbrXmlApi.async_get_currency_options",
+        "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
     ):
         result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -260,5 +260,5 @@ async def test_options_flow_changes_currency(hass):
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.data[CONF_CURRENCY] == "SILVER"
-    assert entry.unique_id == "kursometr_silver"
+    assert entry.unique_id == "kursometr_cbr_silver"
     assert entry.title == "SILVER → RUB"
