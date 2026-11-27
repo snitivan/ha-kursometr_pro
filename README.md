@@ -1,6 +1,6 @@
 ![Описание картинки](screenshots/1.png)
-# Курсометр
-Небольшая интеграция для Home Assistant, которая позволяет видеть курсы любых валют в вашем HA (создает сенсоры). Данные берет из API ЦБ РФ.
+# Курсы ЦБ РФ
+Небольшая интеграция для Home Assistant, которая позволяет видеть курсы любых валют, а также золота и серебра, в вашем HA (создает сенсоры). Данные берет из официального API ЦБ РФ.
 
 [![Добавить в Home Assistant](https://img.shields.io/badge/%D0%94%D0%BE%D0%B1%D0%B0%D0%B2%D0%B8%D1%82%D1%8C_%D0%B2-Home_Assistant-41BDF5?style=for-the-badge&logo=homeassistant&logoColor=white)](https://my.home-assistant.io/redirect/hacs_repository/?owner=snitivan&repository=ha-kursometr_pro&category=integration)
 
