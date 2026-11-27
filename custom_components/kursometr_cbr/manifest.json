@@ -1,6 +1,6 @@
 {
   "domain": "kursometr_cbr",
-  "name": "Курсометр",
+  "name": "Курс ЦБ РФ",
   "codeowners": [
     "@snitivan"
   ],
