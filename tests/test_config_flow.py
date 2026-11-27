@@ -45,17 +45,19 @@ async def test_user_flow_creates_entry(hass):
         "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
     ), patch("custom_components.kursometr_cbr.async_setup_entry", return_value=True):
+        # пользователь отмечает и заголовок категории, и валюту;
+        # единственный инструмент создаётся сразу — без шага подтверждения
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            # пользователь отмечает и заголовок категории, и валюту
             {CONF_CURRENCY: ["__header_currencies__", "USD"], CONF_SCAN_INTERVAL: 3600},
         )
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "USD → RUB"
-    assert result["data"] == {CONF_CURRENCY: "USD", CONF_SCAN_INTERVAL: 3600}
-    assert result["result"].unique_id == "kursometr_cbr_usd"
+    entry = result["result"]
+    assert entry.title == "USD → RUB"
+    assert entry.data == {CONF_CURRENCY: "USD", CONF_SCAN_INTERVAL: 3600}
+    assert entry.unique_id == "kursometr_cbr_usd"
 
 
 async def test_selecting_only_header_is_error(hass):
@@ -95,9 +97,9 @@ async def test_selecting_only_header_is_error(hass):
 
 
 async def test_selecting_two_instruments_creates_both(hass):
-    """Множественный выбор: первый инструмент создаётся сразу, остальные —
-    подтверждающими шагами more_info того же потока; финальный шаг завершает
-    мастер стандартным CREATE_ENTRY."""
+    """Множественный выбор: каждый инструмент подтверждается шагом more_info,
+    его entry создаётся напрямую; поток завершается служебной заглушкой,
+    которая сразу удаляется."""
     with patch(
         "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
@@ -109,14 +111,19 @@ async def test_selecting_two_instruments_creates_both(hass):
             result["flow_id"],
             {CONF_CURRENCY: ["USD", "GOLD"], CONF_SCAN_INTERVAL: 3600},
         )
-        # Первый инструмент (USD) создан сразу, мастер подтверждает GOLD
         assert result["type"] is FlowResultType.FORM
         assert result["step_id"] == "more_info"
+        # подтверждаем USD -> следующий на очереди GOLD
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {}
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "more_info"
+        # подтверждаем GOLD -> мастер завершается
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {}
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY
-        assert result["data"][CONF_CURRENCY] == "GOLD"
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
@@ -125,19 +132,20 @@ async def test_selecting_two_instruments_creates_both(hass):
             result["flow_id"],
             {CONF_CURRENCY: ["EUR", "JPY"], CONF_SCAN_INTERVAL: 3600},
         )
-        assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "more_info"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {}
+        )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {}
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY
-        assert result["data"][CONF_CURRENCY] == "JPY"
 
         await hass.async_block_till_done()
 
     configured = sorted(
         e.data[CONF_CURRENCY]
         for e in hass.config_entries.async_entries(DOMAIN)
+        if e.data.get(CONF_CURRENCY)
     )
     assert configured == ["EUR", "GOLD", "JPY", "USD"]
 
@@ -157,7 +165,11 @@ async def test_gold_can_be_selected(hass):
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_CURRENCY] == "GOLD"
+    gold = [
+        e for e in hass.config_entries.async_entries(DOMAIN)
+        if e.data.get(CONF_CURRENCY) == "GOLD"
+    ]
+    assert len(gold) == 1
 
 
 async def test_duplicate_currency_is_aborted(hass):
