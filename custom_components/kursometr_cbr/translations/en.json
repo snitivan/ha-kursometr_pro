@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Курс ЦБ РФ",
-        "description": "Выберите валюты и драгметаллы (можно несколько сразу) и частоту опроса. На каждый инструмент будет создан отдельный элемент с сенсорами «текущий», «вчера» и «завтра».",
+        "description": "Select currencies and precious metals (multiple at once) and the polling frequency. All selected instruments are added automatically after the wizard finishes.",
         "data": {
           "currency": "Инструмент",
           "scan_interval": "Интервал обновления (секунды)"
@@ -16,10 +16,6 @@
           "currency": "Инструмент",
           "scan_interval": "Интервал обновления (секунды)"
         }
-      },
-      "more_info": {
-        "title": "Добавление следующего инструмента",
-        "description": "Будет создан элемент для **{currency}**. Осталось ещё: {left}. Нажмите «Отправить», чтобы продолжить."
       }
     },
     "error": {

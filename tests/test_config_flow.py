@@ -97,9 +97,8 @@ async def test_selecting_only_header_is_error(hass):
 
 
 async def test_selecting_two_instruments_creates_both(hass):
-    """Множественный выбор: каждый инструмент подтверждается шагом more_info,
-    его entry создаётся напрямую; поток завершается служебной заглушкой,
-    которая сразу удаляется."""
+    """Множественный выбор: первый инструмент создаётся потоком, остальные
+    добавляются автоматически фоновой задачей после завершения мастера."""
     with patch(
         "custom_components.kursometr_cbr.config_flow.CbrXmlApi.async_get_currency_options",
         return_value=dict(CURRENCIES),
@@ -111,19 +110,8 @@ async def test_selecting_two_instruments_creates_both(hass):
             result["flow_id"],
             {CONF_CURRENCY: ["USD", "GOLD"], CONF_SCAN_INTERVAL: 3600},
         )
-        assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "more_info"
-        # подтверждаем USD -> следующий на очереди GOLD
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
-        )
-        assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "more_info"
-        # подтверждаем GOLD -> мастер завершается
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
-        )
         assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["result"].data[CONF_CURRENCY] == "USD"
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
@@ -131,12 +119,6 @@ async def test_selecting_two_instruments_creates_both(hass):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {CONF_CURRENCY: ["EUR", "JPY"], CONF_SCAN_INTERVAL: 3600},
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY
 
