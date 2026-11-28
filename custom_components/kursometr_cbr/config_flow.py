@@ -1,12 +1,11 @@
 """Мастер настройки Курса ЦБ РФ.
 
-Множественное добавление инструментов (валют и драгметаллов): каждый
-отмеченный инструмент подтверждается шагом ``more_info``, после чего его
-config entry создаётся напрямую через ``hass.config_entries.async_add``.
-В конце мастер возвращает служебную запись-заглушку с пустыми данными и
-сразу удаляет её — это позволяет завершить один поток ровно одним
-CREATE_ENTRY, не теряя при этом ни одного выбранного инструмента
-(ограничение HA: flow может создать только одну запись).
+Множественное добавление инструментов (валют и драгметаллов): первый
+отмеченный инструмент создаётся стандартным ``async_create_entry``
+(единственной записью, которую config flow умеет создавать), остальные
+добавляются автоматически сразу после завершения мастера — напрямую через
+``hass.config_entries.async_add``. Такой подход обходит ограничение HA
+(один поток = одна запись) без служебных заглушек и шагов подтверждения.
 
 Выбор разделён на категории «Валюты» и «Драгметаллы»: нативных групп в
 селекторе HA нет, поэтому каждый блок подписан строкой-заголовком.
@@ -117,13 +116,10 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
-        # Очередь инструментов, оставшихся после создания первой записи
-        # (см. async_step_user / async_step_more_info).
-        self._pending: list[tuple[str, int]] = []
-        # Имена инструментов для шага подтверждения.
+        # Инструменты, добавляемые автоматически после завершения мастера.
+        self._rest: list[tuple[str, int]] = []
+        # Имена инструментов для человекочитаемых названий записей.
         self._names: dict[str, str] = {}
-        # Уже созданные этим потоком записи (кроме финальной).
-        self._created: list[ConfigEntry] = []
 
     async def _async_names(self) -> dict[str, str]:
         """Валюты для селектора; при недоступности ЦБ — fallback-список."""
@@ -155,21 +151,13 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not new_codes:
                     # Все отмеченные инструменты уже измеряются.
                     return self.async_abort(reason="already_configured")
-                if len(new_codes) == 1:
-                    # Единственный инструмент — стандартное завершение потока.
-                    first = new_codes[0]
-                    await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
-                    self._abort_if_unique_id_configured()
-                    # Уникальный id занят только что созданной потоком записью
-                    # (вариант с подтверждением через more_info).
-                    if self._async_current_entries(include_ignore=False):
-                        return self.async_abort(reason="already_configured")
-                    return self._create_entry(first, interval)
-                # Несколько инструментов: каждый подтверждается своим шагом
-                # more_info и создаётся напрямую; поток завершается служебной
-                # записью-заглушкой, которая сразу удаляется.
-                self._pending = [(c, interval) for c in new_codes]
-                return await self.async_step_more_info()
+                # Первый инструмент — стандартная запись потока; остальные
+                # будут добавлены сразу после её создания (см. _create_entry).
+                first = new_codes[0]
+                await self.async_set_unique_id(f"{DOMAIN}_{first.lower()}")
+                self._abort_if_unique_id_configured()
+                self._rest = [(c, interval) for c in new_codes[1:]]
+                return self._create_entry(first, interval)
 
         currencies = await self._async_names()
 
@@ -199,46 +187,37 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     def _create_entry(self, currency: str, interval: int) -> FlowResult:
-        """Создаёт config entry для одного инструмента."""
-        return self.async_create_entry(
+        """Создаёт запись для первого инструмента и очередь на остальные.
+
+        Оставшиеся выбранные инструменты добавляются автоматически сразу
+        после завершения мастера (см. ``_async_add_rest``): config flow HA
+        может создать только одну запись, но мы добавляем прочие напрямую
+        через ``hass.config_entries.async_add``.
+        """
+        result = self.async_create_entry(
             title=f"{currency} → RUB",
             data={
                 CONF_CURRENCY: currency,
                 CONF_SCAN_INTERVAL: interval,
             },
         )
+        if self._rest:
+            rest = list(self._rest)
+            self._rest = []
 
-    def _dummy_result(self) -> FlowResult:
-        """Финальный результат потока: служебная запись без данных.
+            async def _add_rest() -> None:
+                for code, intr in rest:
+                    await self._async_add_immediate(code, intr)
 
-        HA требует, чтобы config flow завершился ровно одним CREATE_ENTRY.
-        Все реально выбранные инструменты уже добавлены через
-        _async_add_immediate, поэтому заглушка сразу удаляется — она нужна
-        лишь для корректного закрытия мастера.
-        """
-        # Данные заглушки минимально валидны (схема записи требует строку),
-        # но запись сразу удаляется — setup для неё не успевает запуститься.
-        result = self.async_create_entry(
-            title="Курс ЦБ РФ",
-            data={CONF_CURRENCY: "", CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL},
-        )
-        entry = result.get("result")
-        if entry is not None:
-            self.hass.async_create_task(
-                self.hass.config_entries.async_remove(entry.entry_id)
-            )
+            self.hass.async_create_task(_add_rest())
         return result
 
     async def _async_add_immediate(self, currency: str, interval: int) -> None:
-        """Добавляет запись сразу, не завершая поток.
+        """Добавляет config entry для одного инструмента вне потока.
 
-        При множественном выборе первый инструмент должен появиться в HA
-        немедленно (иначе пользователь увидит «ничего не создалось» после
-        закрытия мастера). Финальная запись создаётся стандартным
-        async_create_entry на последнем шаге more_info.
+        ``async_entry_for_domain_unique_id`` защищает от дублей, если запись
+        с таким инструментом уже существует.
         """
-        from homeassistant.config_entries import ConfigEntry  # local re-import
-
         unique_id = f"{DOMAIN}_{currency.lower()}"
         if self.hass.config_entries.async_entry_for_domain_unique_id(
             DOMAIN, unique_id
@@ -250,43 +229,13 @@ class KursometrConfigFlow(ConfigFlow, domain=DOMAIN):
             domain=DOMAIN,
             minor_version=1,
             options={},
-            source=self.source,
+            source=self.source or "user",
             title=f"{currency} → RUB",
             unique_id=unique_id,
             version=self.VERSION,
         )
+        # Регистрируем запись в HA; async_add сам запускает её setup.
         await self.hass.config_entries.async_add(entry)
-        self._created.append(entry)
-
-    async def async_step_more_info(self, user_input=None) -> FlowResult:
-        """Подтверждение добавления следующего выбранного инструмента.
-
-        Каждое подтверждение создаёт config entry напрямую; когда очередь
-        пуста, поток завершается служебной записью-заглушкой, которая
-        сразу удаляется (реальные данные уже сохранены в своих записях).
-        """
-        if user_input is not None:
-            if not self._pending:
-                return self._dummy_result()
-            currency, interval = self._pending.pop(0)
-            await self._async_add_immediate(currency, interval)
-            if self._pending:
-                # Подтверждаем создание следующего инструмента.
-                return await self.async_step_more_info()
-            return self._dummy_result()
-
-        if not self._pending:
-            return self._dummy_result()
-
-        currency, interval = self._pending[0]
-
-        return self.async_show_form(
-            step_id="more_info",
-            description_placeholders={
-                "currency": _label_of(currency, self._names),
-                "left": str(len(self._pending) - 1),
-            },
-        )
 
     @staticmethod
     @callback
